@@ -5,7 +5,7 @@ import { authenticate, authorize, JWT_SECRET, type AuthRequest } from "./middlew
 import { calculateResults, generatePIN, getGradeAndRemark } from "./utils/result-calculator";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { insertUserSchema, insertStudentSchema, insertResultSchema, insertPinRequestSchema, GradeRange, DEFAULT_GRADE_RANGES, gradeRangeSchema } from "@shared/schema";
+import { insertUserSchema, insertStudentSchema, insertResultSchema, insertPinRequestSchema, insertClassSchema, insertSubjectSchema, GradeRange, DEFAULT_GRADE_RANGES, gradeRangeSchema } from "@shared/schema";
 import { z } from "zod";
 
 // Helper function to get school's grade configuration
@@ -42,6 +42,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isValid = await bcrypt.compare(password, user.password);
       if (!isValid) {
         return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      if (!user.isActive) {
+        return res.status(403).json({ message: "Account is pending approval" });
       }
 
       await storage.updateUser(user.id, { lastLogin: new Date() });
@@ -176,7 +180,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/schools/:id", authenticate, authorize("super_admin"), async (req, res) => {
     try {
-      const school = await storage.updateSchool(req.params.id, req.body);
+      const allowed = ["name", "code", "subdomain", "address", "city", "state", "country", "phone", "email", "logo", "motto", "isActive", "gradeRanges", "computationMode"] as const;
+      const updates: Record<string, unknown> = {};
+      for (const key of allowed) {
+        if (req.body[key] !== undefined) updates[key] = req.body[key];
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
+      const school = await storage.updateSchool(req.params.id, updates as any);
       res.json(school);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -760,6 +772,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Class, subject, session, and term are required" });
       }
 
+      const gradeRanges = await getSchoolGradeRanges(req.user!.schoolId!);
+
       // Verify class and subject exist and belong to user's school
       const classRecord = await storage.getClass(classId);
       if (!classRecord || classRecord.schoolId !== req.user!.schoolId) {
@@ -802,8 +816,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const ca2 = parseFloat(e.ca2) || 0;
             const exam = parseFloat(e.exam) || 0;
             const total = ca1 + ca2 + exam;
-            const grade = calculateGrade(total);
-            const remark = getGradeRemarkFromTotal(total);
+            const grade = calculateGrade(total, gradeRanges);
+            const remark = getGradeRemarkFromTotal(total, gradeRanges);
 
             return {
               sheetId: existingDraft.id,
@@ -850,8 +864,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const ca2 = parseFloat(e.ca2) || 0;
           const exam = parseFloat(e.exam) || 0;
           const total = ca1 + ca2 + exam;
-          const grade = calculateGrade(total);
-          const remark = getGradeRemarkFromTotal(total);
+          const grade = calculateGrade(total, gradeRanges);
+          const remark = getGradeRemarkFromTotal(total, gradeRanges);
 
           return {
             sheetId: sheet.id,
@@ -896,6 +910,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Can only update draft or rejected result sheets" });
       }
 
+      const gradeRanges = await getSchoolGradeRanges(req.user!.schoolId!);
       const { entries } = req.body;
 
       // Clear existing entries and create new ones
@@ -907,8 +922,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const ca2 = parseFloat(e.ca2) || 0;
           const exam = parseFloat(e.exam) || 0;
           const total = ca1 + ca2 + exam;
-          const grade = calculateGrade(total);
-          const remark = getGradeRemarkFromTotal(total);
+          const grade = calculateGrade(total, gradeRanges);
+          const remark = getGradeRemarkFromTotal(total, gradeRanges);
 
           return {
             sheetId: sheet.id,
@@ -1244,6 +1259,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "School ID is required" });
       }
 
+      const rawQuantity = parseInt(quantity, 10);
+      const quantityValid = Math.min(1000, Math.max(1, isNaN(rawQuantity) ? 0 : rawQuantity));
+      if (quantityValid <= 0) {
+        return res.status(400).json({ message: "Valid quantity (1–1000) is required" });
+      }
+
       // Validate maxUsageCount
       const usageLimit = Math.max(1, Math.min(100, parseInt(maxUsageCount) || 1));
 
@@ -1251,7 +1272,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const expiryDate = new Date();
       expiryDate.setMonth(expiryDate.getMonth() + 6); // 6 months expiry
 
-      for (let i = 0; i < quantity; i++) {
+      for (let i = 0; i < quantityValid; i++) {
         pinsToCreate.push({
           schoolId: targetSchoolId,
           pin: generatePIN(),
@@ -1404,7 +1425,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Cannot update users from other schools" });
       }
 
-      const updated = await storage.updateUser(req.params.id, req.body);
+      const allowed = ["firstName", "lastName", "phoneNumber", "isActive"] as const;
+      const updates: Record<string, unknown> = {};
+      for (const key of allowed) {
+        if (req.body[key] !== undefined) updates[key] = req.body[key];
+      }
+      if (req.user!.role === "school_admin") {
+        delete updates.role;
+        delete (updates as any).schoolId;
+      } else {
+        if (req.body.role !== undefined) updates.role = req.body.role;
+        if (req.body.schoolId !== undefined) updates.schoolId = req.body.schoolId;
+      }
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
+      const updated = await storage.updateUser(req.params.id, updates as any);
       const { password, ...userWithoutPassword } = updated;
       res.json(userWithoutPassword);
     } catch (error: any) {
@@ -1454,9 +1490,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== CLASSES ROUTES =====
   app.get("/api/classes", authenticate, async (req: AuthRequest, res) => {
     try {
-      const schoolId = req.user!.role === "super_admin"
-        ? req.query.schoolId as string
-        : req.user!.schoolId!;
+      let schoolId: string | undefined;
+      if (req.user!.role === "super_admin") {
+        schoolId = req.query.schoolId as string;
+        if (!schoolId) {
+          return res.status(400).json({ message: "School ID required for super admin" });
+        }
+      } else {
+        schoolId = req.user!.schoolId ?? undefined;
+        if (!schoolId) {
+          return res.status(403).json({ message: "School association required" });
+        }
+      }
       const classes = await storage.listClasses(schoolId);
       res.json(classes);
     } catch (error: any) {
@@ -1466,11 +1511,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/classes", authenticate, authorize("school_admin"), async (req: AuthRequest, res) => {
     try {
-      const classRecord = await storage.createClass({
+      const validated = insertClassSchema.parse({
         ...req.body,
         schoolId: req.user!.schoolId!,
         createdBy: req.user!.id,
       });
+      const classRecord = await storage.createClass(validated);
       res.status(201).json(classRecord);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -1517,9 +1563,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ===== SUBJECTS ROUTES =====
   app.get("/api/subjects", authenticate, async (req: AuthRequest, res) => {
     try {
-      const schoolId = req.user!.role === "super_admin"
-        ? req.query.schoolId as string
-        : req.user!.schoolId!;
+      let schoolId: string | undefined;
+      if (req.user!.role === "super_admin") {
+        schoolId = req.query.schoolId as string;
+        if (!schoolId) {
+          return res.status(400).json({ message: "School ID required for super admin" });
+        }
+      } else {
+        schoolId = req.user!.schoolId ?? undefined;
+        if (!schoolId) {
+          return res.status(403).json({ message: "School association required" });
+        }
+      }
       const subjects = await storage.listSubjects(schoolId);
       res.json(subjects);
     } catch (error: any) {
@@ -1529,11 +1584,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/subjects", authenticate, authorize("school_admin"), async (req: AuthRequest, res) => {
     try {
-      const subject = await storage.createSubject({
+      const validated = insertSubjectSchema.parse({
         ...req.body,
         schoolId: req.user!.schoolId!,
         createdBy: req.user!.id,
       });
+      const subject = await storage.createSubject(validated);
       res.status(201).json(subject);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -1692,10 +1748,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "This PIN has expired" });
       }
 
-      // Check if PIN has reached max attempts
       const attempts = Array.isArray(pinRecord.attempts) ? pinRecord.attempts : [];
-      if (pinRecord.maxAttempts && attempts.length >= pinRecord.maxAttempts) {
+      const usageCount = pinRecord.usageCount ?? 0;
+      const maxUsageCount = pinRecord.maxUsageCount ?? 1;
+      if (usageCount >= maxUsageCount) {
         return res.status(400).json({ message: "This PIN has reached its maximum usage limit" });
+      }
+      if (pinRecord.maxAttempts && attempts.length >= pinRecord.maxAttempts) {
+        return res.status(400).json({ message: "This PIN has reached its maximum attempt limit" });
       }
 
       // Find the student
@@ -1734,10 +1794,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get school info
       const school = await storage.getSchool(pinRecord.schoolId);
 
-      // Update PIN usage
+      const newUsageCount = (pinRecord.usageCount ?? 0) + 1;
       const currentAttempts = Array.isArray(pinRecord.attempts) ? pinRecord.attempts : [];
+      const isExhausted = newUsageCount >= (pinRecord.maxUsageCount ?? 1);
       await storage.updatePin(pinRecord.id, {
-        isUsed: true,
+        usageCount: newUsageCount,
+        isUsed: isExhausted,
         attempts: [...currentAttempts, { type: "success", admissionNumber: student.admissionNumber, studentId: student.id, timestamp: new Date().toISOString() }],
         usedBy: { admissionNumber: student.admissionNumber, studentName: `${student.firstName} ${student.lastName}`, usedAt: new Date().toISOString() },
       });
@@ -1801,15 +1863,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Email already registered" });
       }
 
-      // Create the school (pending approval)
+      // Create the school (pending approval) — no subdomain/createdBy for public registration
       const school = await storage.createSchool({
         name: validated.schoolName,
         code: validated.schoolCode,
+        subdomain: null,
         email: validated.schoolEmail,
         phone: validated.schoolPhone ?? "",
         address: validated.schoolAddress ?? "",
         logo: validated.logo,
         isActive: false, // Requires super admin approval
+        createdBy: undefined,
       });
 
       // Hash password and create admin user
@@ -1833,7 +1897,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       if (error.name === "ZodError") {
-        return res.status(400).json({ message: error.errors[0]?.message || "Validation failed" });
+        const flattened = error.flatten?.();
+        const firstMessage = error.errors?.[0]?.message || "Validation failed";
+        return res.status(400).json({
+          message: firstMessage,
+          errors: flattened?.fieldErrors ? Object.entries(flattened.fieldErrors).map(([path, msgs]) => ({ path, messages: msgs })) : undefined,
+        });
       }
       res.status(500).json({ message: error.message });
     }
@@ -2168,8 +2237,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/notifications/:id/read", authenticate, async (req: AuthRequest, res) => {
     try {
-      const notification = await storage.markNotificationRead(req.params.id);
-      res.json(notification);
+      const notification = await storage.getNotification(req.params.id);
+      if (!notification || notification.userId !== req.user!.id) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      const updated = await storage.markNotificationRead(req.params.id);
+      res.json(updated);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
@@ -2217,6 +2290,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/teacher-assignments/:teacherId", authenticate, async (req: AuthRequest, res) => {
     try {
+      const teacher = await storage.getUser(req.params.teacherId);
+      if (!teacher) {
+        return res.status(404).json({ message: "Teacher not found" });
+      }
+      if (req.user!.role !== "super_admin" && teacher.schoolId !== req.user!.schoolId) {
+        return res.status(403).json({ message: "Cannot view assignments for teachers from other schools" });
+      }
       const assignments = await storage.getTeacherAssignments(req.params.teacherId);
       res.json(assignments);
     } catch (error: any) {
@@ -2294,6 +2374,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (result.schoolId !== req.user!.schoolId) {
         return res.status(403).json({ message: "Cannot approve results from other schools" });
+      }
+
+      if (result.uploadedBy === req.user!.id) {
+        return res.status(403).json({ message: "Cannot approve your own results" });
       }
 
       // Check if school has logo

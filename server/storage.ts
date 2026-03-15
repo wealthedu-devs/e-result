@@ -130,6 +130,7 @@ export interface IStorage {
   deleteClassSubjects(classId: string): Promise<void>;
 
   // Notifications
+  getNotification(id: string): Promise<Notification | undefined>;
   createNotification(notification: InsertNotification): Promise<Notification>;
   listNotifications(userId: string, limit?: number): Promise<Notification[]>;
   markNotificationRead(id: string): Promise<Notification>;
@@ -586,6 +587,11 @@ export class DatabaseStorage implements IStorage {
   async createNotification(notification: InsertNotification): Promise<Notification> {
     const [record] = await db.insert(notifications).values(notification).returning();
     return record;
+  }
+
+  async getNotification(id: string): Promise<Notification | undefined> {
+    const [record] = await db.select().from(notifications).where(eq(notifications.id, id));
+    return record || undefined;
   }
 
   async listNotifications(userId: string, limit: number = 50): Promise<Notification[]> {

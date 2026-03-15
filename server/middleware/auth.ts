@@ -1,7 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET && process.env.NODE_ENV === "production") {
+  throw new Error("JWT_SECRET must be set in production");
+}
+const JWT_SECRET_OR_FALLBACK = JWT_SECRET || "dev-only-fallback-do-not-use-in-production";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -20,7 +24,7 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
       return res.status(401).json({ message: "Authentication required" });
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = jwt.verify(token, JWT_SECRET_OR_FALLBACK) as any;
     req.user = decoded;
     next();
   } catch (error) {
@@ -42,4 +46,4 @@ export function authorize(...roles: string[]) {
   };
 }
 
-export { JWT_SECRET };
+export { JWT_SECRET_OR_FALLBACK as JWT_SECRET };

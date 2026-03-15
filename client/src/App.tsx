@@ -38,35 +38,77 @@ interface User {
 }
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [user, setUser] = useState<User | null>(null);
+  const [validating, setValidating] = useState(true);
 
   useEffect(() => {
     const storedUser = localStorage.getItem("user");
     const token = localStorage.getItem("token");
-    
+
     if (!storedUser || !token) {
       setLocation("/login");
+      setValidating(false);
       return;
     }
-    
+
+    let parsed: User;
     try {
-      setUser(JSON.parse(storedUser));
+      parsed = JSON.parse(storedUser);
     } catch {
       setLocation("/login");
+      setValidating(false);
+      return;
     }
+
+    async function validateToken() {
+      try {
+        const base = import.meta.env.VITE_API_URL || "";
+        const res = await fetch(`${base}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          credentials: "include",
+        });
+        if (res.status === 401) {
+          localStorage.removeItem("user");
+          localStorage.removeItem("token");
+          queryClient.clear();
+          setLocation("/login");
+          setValidating(false);
+          return;
+        }
+        if (res.ok) {
+          const me = await res.json();
+          setUser(me);
+          localStorage.setItem("user", JSON.stringify(me));
+        } else {
+          setUser(parsed);
+        }
+      } catch {
+        setUser(parsed);
+      } finally {
+        setValidating(false);
+      }
+    }
+
+    validateToken();
   }, [setLocation]);
+
+  useEffect(() => {
+    if (!user || validating) return;
+    if (location === "/schools" && user.role !== "super_admin") {
+      setLocation("/dashboard");
+    }
+  }, [user, location, validating, setLocation]);
 
   const handleLogout = () => {
     localStorage.removeItem("user");
     localStorage.removeItem("token");
-    // Cancel pending queries and clear cache to prevent stale data when switching users
     queryClient.cancelQueries();
     queryClient.clear();
     setLocation("/login");
   };
 
-  if (!user) {
+  if (validating || !user) {
     return null;
   }
 

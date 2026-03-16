@@ -1754,7 +1754,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (usageCount >= maxUsageCount) {
         return res.status(400).json({ message: "This PIN has reached its maximum usage limit" });
       }
-      if (pinRecord.maxAttempts && attempts.length >= pinRecord.maxAttempts) {
+      const failedAttempts = attempts.filter((a: any) => a?.type === "failed").length;
+      if (pinRecord.maxAttempts && failedAttempts >= pinRecord.maxAttempts) {
         return res.status(400).json({ message: "This PIN has reached its maximum attempt limit" });
       }
 

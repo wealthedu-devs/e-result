@@ -6,5 +6,5 @@ const { validate, checkResultSchema } = require('../validators');
 
 router.post('/check-result', validate(checkResultSchema), checkResult);
 router.get('/result-pdf/:resultId', downloadResultPDF);
-
+router.post('/register-school', validate(schoolSchema), registerSchool);
 module.exports = router;

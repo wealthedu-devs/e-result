@@ -148,11 +148,6 @@ export default function Login() {
             </div>
           </CardContent>
         </Card>
-
-        <div className="mt-6 text-center text-sm text-muted-foreground space-y-1">
-          <p>Demo Super Admin: admin@resultchecker.com / admin123</p>
-          <p>Demo School Admin: admin@demohighschool.edu.ng / admin123</p>
-        </div>
       </div>
     </div>
   );

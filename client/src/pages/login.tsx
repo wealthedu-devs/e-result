@@ -149,8 +149,9 @@ export default function Login() {
           </CardContent>
         </Card>
 
-        <div className="mt-6 text-center text-sm text-muted-foreground">
-          <p>Demo Credentials: superadmin@smartresult.com / Admin@123456</p>
+        <div className="mt-6 text-center text-sm text-muted-foreground space-y-1">
+          <p>Demo Super Admin: admin@resultchecker.com / admin123</p>
+          <p>Demo School Admin: admin@demohighschool.edu.ng / admin123</p>
         </div>
       </div>
     </div>

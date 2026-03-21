@@ -325,6 +325,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updated = await storage.updateSchool(req.params.id, { isActive });
 
+      // Keep the primary school admin in sync with school approval status.
+      const schoolUsers = await storage.listUsers(req.params.id);
+      const schoolAdmins = schoolUsers.filter((user) => user.role === "school_admin");
+      for (const admin of schoolAdmins) {
+        if (admin.isActive !== isActive) {
+          await storage.updateUser(admin.id, { isActive });
+        }
+      }
+
       // Create audit log
       await storage.createAuditLog({
         userId: req.user!.id,

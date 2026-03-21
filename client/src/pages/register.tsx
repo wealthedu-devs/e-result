@@ -136,7 +136,7 @@ export default function Register() {
 
       toast({
         title: "Registration Successful!",
-        description: "Your account is pending approval. You will be notified once approved.",
+        description: "Your school has been submitted for approval. Login will work after a super admin activates the school and admin account.",
       });
 
       setLocation("/login");
